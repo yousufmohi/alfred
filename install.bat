@@ -18,13 +18,20 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [1/4] Installing pipx...
+echo [1/5] Installing pipx...
 pip install --quiet pipx
 if errorlevel 1 (
     echo ERROR: Failed to install pipx
     pause
     exit /b 1
 )
+
+REM Add Python Scripts to PATH for this session
+for /f "delims=" %%i in ('python -c "import sysconfig; print(sysconfig.get_path('scripts'))"') do set PYTHON_SCRIPTS=%%i
+set "PATH=%PATH%;%PYTHON_SCRIPTS%"
+echo Added Python Scripts to PATH
+echo Done.
+echo.
 
 echo [2/5] Installing Poetry and dependencies...
 pip install --quiet poetry >nul 2>&1
@@ -36,11 +43,16 @@ echo Done.
 echo.
 
 echo [3/5] Setting up pipx paths...
-pipx ensurepath >nul 2>&1
+python -m pipx ensurepath >nul 2>&1
+
+REM Manually add to PATH as backup
+setx PATH "%PATH%;%USERPROFILE%\.local\bin" >nul 2>&1
+echo Done.
+echo.
 
 echo [4/5] Installing Alfred...
-pipx uninstall alfred >nul 2>&1
-pipx install .
+python -m pipx uninstall alfred >nul 2>&1
+python -m pipx install .
 if errorlevel 1 (
     echo ERROR: Failed to install Alfred
     pause

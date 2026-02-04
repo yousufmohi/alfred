@@ -37,6 +37,14 @@ Write-Host ""
 Write-Host "[2/5] Installing pipx..." -ForegroundColor Yellow
 try {
     pip install --quiet pipx
+    
+    # Add Python Scripts to PATH immediately so pipx works in this session
+    $pythonScripts = python -c "import sysconfig; print(sysconfig.get_path('scripts'))"
+    if ($pythonScripts) {
+        $env:PATH += ";$pythonScripts"
+        Write-Host "Added Python Scripts to PATH for this session" -ForegroundColor Green
+    }
+    
     Write-Host "Done." -ForegroundColor Green
 } catch {
     Write-Host "[ERROR] Failed to install pipx" -ForegroundColor Red
@@ -47,17 +55,32 @@ try {
 
 Write-Host ""
 Write-Host "[3/5] Setting up pipx paths..." -ForegroundColor Yellow
-pipx ensurepath 2>&1 | Out-Null
+try {
+    python -m pipx ensurepath 2>&1 | Out-Null
+} catch {
+    Write-Host "[WARNING] pipx ensurepath failed, but continuing..." -ForegroundColor Yellow
+}
+
+# Manually ensure PATH is set (backup)
+$pipxBin = "$env:USERPROFILE\.local\bin"
+$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+if ($userPath -notlike "*$pipxBin*") {
+    [Environment]::SetEnvironmentVariable("Path", "$userPath;$pipxBin", "User")
+    Write-Host "Added $pipxBin to system PATH" -ForegroundColor Green
+}
+
+# Also add to current session
+$env:PATH += ";$pipxBin"
 Write-Host "Done." -ForegroundColor Green
 
 Write-Host ""
 Write-Host "[4/5] Installing Alfred..." -ForegroundColor Yellow
-# Uninstall if exists
-pipx uninstall alfred 2>&1 | Out-Null
+# Uninstall if exists (using python -m pipx instead of pipx command)
+python -m pipx uninstall alfred 2>&1 | Out-Null
 
 # Install
 try {
-    pipx install .
+    python -m pipx install .
     Write-Host "Done." -ForegroundColor Green
 } catch {
     Write-Host "[ERROR] Failed to install Alfred" -ForegroundColor Red
