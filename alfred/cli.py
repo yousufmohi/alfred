@@ -242,6 +242,23 @@ def setup():
     console.print("[green]🎉 Setup complete! Try running:[/green]")
     console.print("  alfred review <your-file>\n")
 
+@app.command()
+def revert():
+    """Revert alfred configuration to defaults"""
+    config = Config()
+    
+    if config.has_api_key():
+        confirm = Confirm.ask(
+            "[yellow]⚠️  This will delete your saved API key. Continue?[/yellow]",
+            default=False
+        )
+        if confirm:
+            config.clear_config()
+            console.print("[green]✅ Configuration reverted to defaults.[/green]")
+        else:
+            console.print("[yellow]Revert cancelled.[/yellow]")
+    else:
+        console.print("[yellow]No configuration to revert.[/yellow]")   
 
 @app.command()
 def config_cmd(
