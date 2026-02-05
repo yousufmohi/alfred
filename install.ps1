@@ -1,10 +1,8 @@
 # Alfred Easy Installer for Windows (PowerShell)
 # Run with: .\install.ps1
 
-Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "Alfred Easy Installer" -ForegroundColor Cyan
-Write-Host "========================================" -ForegroundColor Cyan
-Write-Host ""
+Clear-Host
+
 
 # Check if Python is installed
 try {
@@ -14,163 +12,149 @@ try {
     Write-Host "[ERROR] Python is not installed or not in PATH" -ForegroundColor Red
     Write-Host ""
     Write-Host "Please install Python from https://python.org" -ForegroundColor Yellow
-    Write-Host 'Make sure to check "Add Python to PATH" during installation' -ForegroundColor Yellow
     Write-Host ""
-    Read-Host "Press Enter to exit"
     exit 1
 }
 
-Write-Host ""
-Write-Host "[1/5] Installing Poetry and dependencies..." -ForegroundColor Yellow
-try {
-    # Install Poetry
-    pip install --quiet poetry
+function Show-Loading {
+    param([string]$Message)
     
-    # Install project dependencies
-    poetry install --quiet
-    Write-Host "Done." -ForegroundColor Green
-} catch {
-    Write-Host "WARNING: Poetry dependencies had issues, continuing anyway..." -ForegroundColor Yellow
-}
-Write-Host ""
-
-Write-Host "[2/5] Installing pipx..." -ForegroundColor Yellow
-try {
-    pip install --quiet pipx
-    
-    # Add Python Scripts to PATH immediately so pipx works in this session
-    $pythonScripts = python -c "import sysconfig; print(sysconfig.get_path('scripts'))"
-    if ($pythonScripts) {
-        $env:PATH += ";$pythonScripts"
-        Write-Host "Added Python Scripts to PATH for this session" -ForegroundColor Green
+    Write-Host "  $Message" -NoNewline -ForegroundColor Cyan
+    for ($i = 0; $i -lt 3; $i++) {
+        Start-Sleep -Milliseconds 200
+        Write-Host "." -NoNewline -ForegroundColor Cyan
     }
+}
+
+function Complete-Loading {
+    param([string]$Status = "Done")
     
-    Write-Host "Done." -ForegroundColor Green
-} catch {
-    Write-Host "[ERROR] Failed to install pipx" -ForegroundColor Red
-    Write-Host $_.Exception.Message
-    Read-Host "Press Enter to exit"
-    exit 1
+    $cursorPos = $Host.UI.RawUI.CursorPosition
+    $cursorPos.X = 50
+    $Host.UI.RawUI.CursorPosition = $cursorPos
+    $checkmark = [char]0x2713
+    Write-Host "[$checkmark] $Status" -ForegroundColor Green
+}
+# Step 1: Poetry
+Show-Loading "[1/6] Installing Poetry and dependencies"
+pip install --quiet poetry 2>&1 | Out-Null
+poetry install --quiet 2>&1 | Out-Null
+if ($LASTEXITCODE -eq 0) {
+    Complete-Loading "Done"
+} else {
+    Complete-Loading "Warning"
 }
 
-Write-Host ""
-Write-Host "[3/5] Setting up pipx paths..." -ForegroundColor Yellow
-try {
-    python -m pipx ensurepath 2>&1 | Out-Null
-} catch {
-    Write-Host "[WARNING] pipx ensurepath failed, but continuing..." -ForegroundColor Yellow
+# Step 2: pipx
+Show-Loading "[2/6] Installing pipx"
+pip install --quiet pipx 2>&1 | Out-Null
+
+# Add Python Scripts to PATH for current session
+$pythonScripts = python -c "import sysconfig; print(sysconfig.get_path('scripts'))"
+if ($pythonScripts) {
+    $env:PATH = "$pythonScripts;$env:PATH"
 }
 
-# Manually ensure PATH is set (backup)
+Complete-Loading "Done"
+
+# Step 3: Clean old alfred installation
+Show-Loading "[3/6] Cleaning old installation"
+
+# Remove old pipx venv completely
+$alfredVenv = "$env:USERPROFILE\pipx\venvs\alfred"
+if (Test-Path $alfredVenv) {
+    Remove-Item -Recurse -Force $alfredVenv 2>&1 | Out-Null
+}
+
+# Remove old binary
+$alfredExe = "$env:USERPROFILE\.local\bin\alfred.exe"
+if (Test-Path $alfredExe) {
+    Remove-Item -Force $alfredExe 2>&1 | Out-Null
+}
+
+Complete-Loading "Done"
+
+# Step 4: PATH setup
+Show-Loading "[4/6] Configuring PATH"
+python -m pipx ensurepath 2>&1 | Out-Null
+
 $pipxBin = "$env:USERPROFILE\.local\bin"
+
+# Add to system PATH
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
 if ($userPath -notlike "*$pipxBin*") {
     [Environment]::SetEnvironmentVariable("Path", "$userPath;$pipxBin", "User")
-    Write-Host "Added $pipxBin to system PATH" -ForegroundColor Green
 }
 
-# Also add to current session
-$env:PATH += ";$pipxBin"
-Write-Host "Done." -ForegroundColor Green
+# Add to PowerShell profile
+if (!(Test-Path $PROFILE)) {
+    New-Item -Path $PROFILE -Type File -Force | Out-Null
+}
 
-Write-Host ""
-Write-Host "[4/5] Installing Alfred..." -ForegroundColor Yellow
-# Uninstall if exists (using python -m pipx instead of pipx command)
-python -m pipx uninstall alfred 2>&1 | Out-Null
+$pathLine = 'if ($env:PATH -notlike "*$env:USERPROFILE\.local\bin*") { $env:PATH = "$env:USERPROFILE\.local\bin;$env:PATH" }'
+$profileContent = Get-Content $PROFILE -ErrorAction SilentlyContinue -Raw
 
-# Install
-try {
-    python -m pipx install .
-    Write-Host "Done." -ForegroundColor Green
-} catch {
-    Write-Host "[ERROR] Failed to install Alfred" -ForegroundColor Red
-    Write-Host $_.Exception.Message
-    Read-Host "Press Enter to exit"
+if (!$profileContent -or $profileContent -notlike "*alfred installer*") {
+    Add-Content $PROFILE "`n# Added by Alfred installer`n$pathLine"
+}
+
+Complete-Loading "Done"
+
+# Step 5: Install Alfred (FRESH)
+Show-Loading "[5/6] Installing Alfred"
+
+$installOutput = python -m pipx install . 2>&1
+$installExitCode = $LASTEXITCODE
+
+if ($installExitCode -eq 0) {
+    Complete-Loading "Done"
+} else {
+    Write-Host ""
+    Write-Host ""
+    Write-Host "  ERROR: Installation failed!" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "  Output:" -ForegroundColor Yellow
+    Write-Host $installOutput
+    Write-Host ""
+    Read-Host "  Press Enter to exit"
     exit 1
 }
 
-Write-Host ""
-Write-Host "[5/5] Testing installation..." -ForegroundColor Yellow
-Write-Host ""
+# Step 6: Verify
+Show-Loading "[6/6] Verifying"
 
-# Add pipx bin to PATH for this session
-$env:PATH += ";$env:USERPROFILE\.local\bin"
-
-# Test
-try {
-    & "$env:USERPROFILE\.local\bin\alfred.exe" version
-    Write-Host ""
-    Write-Host "========================================" -ForegroundColor Green
-    Write-Host "SUCCESS! Alfred is installed" -ForegroundColor Green
-    Write-Host "========================================" -ForegroundColor Green
-} catch {
-    Write-Host ""
-    Write-Host "[WARNING] Installation completed but test failed" -ForegroundColor Yellow
-    Write-Host "This might be normal - try closing and reopening your terminal" -ForegroundColor Yellow
-}
-
-Write-Host ""
-Write-Host "IMPORTANT: Setting up permanent PATH..." -ForegroundColor Cyan
-
-# Check if profile exists, create if not
-if (!(Test-Path $PROFILE)) {
-    New-Item -Path $PROFILE -Type File -Force | Out-Null
-    Write-Host "[OK] Created PowerShell profile" -ForegroundColor Green
-}
-
-# Check if PATH is already in profile
-$pathLine = '$env:PATH += ";$env:USERPROFILE\.local\bin"'
-$profileContent = Get-Content $PROFILE -ErrorAction SilentlyContinue
-
-if ($profileContent -notcontains $pathLine) {
-    Add-Content $PROFILE "`n# Added by Alfred installer`n$pathLine"
-    Write-Host "[OK] Added to PowerShell profile" -ForegroundColor Green
+if (Test-Path $alfredExe) {
+    # Add to current session PATH
+    $env:PATH = "$pipxBin;$env:PATH"
     
-    # Reload profile immediately
-    . $PROFILE
-    Write-Host "[OK] Profile reloaded - alfred command is now available!" -ForegroundColor Green
-    Write-Host ""
-    Write-Host "Try it now: alfred --help" -ForegroundColor Cyan
+    Complete-Loading "Done"
 } else {
-    Write-Host "[OK] Already in PowerShell profile" -ForegroundColor Green
-    
-    # Reload anyway
-    . $PROFILE
-    Write-Host "[OK] Profile reloaded - alfred command should work now!" -ForegroundColor Green
+    Write-Host ""
+    Write-Host ""
+    Write-Host "  ERROR: Binary not found!" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "  Expected: $alfredExe" -ForegroundColor Yellow
+    Write-Host ""
+    python -m pipx list
+    Write-Host ""
+    Read-Host "  Press Enter to exit"
+    exit 1
 }
 
-Write-Host ""
-Write-Host "========================================" -ForegroundColor Green
-Write-Host "Installation Complete!" -ForegroundColor Green  
-Write-Host "========================================" -ForegroundColor Green
-Write-Host ""
-Write-Host "Testing alfred command..." -ForegroundColor Cyan
 
-# Try to run alfred
+# Test command
 try {
     alfred --version 2>&1 | Out-Null
     if ($LASTEXITCODE -eq 0) {
-        Write-Host "[SUCCESS] 'alfred' command works!" -ForegroundColor Green
+        Write-Host "  SUCCESS! 'alfred' command works!" -ForegroundColor Green
         Write-Host ""
-        Write-Host "Next steps:" -ForegroundColor Cyan
-        Write-Host "  alfred setup" -ForegroundColor White
-        Write-Host "  alfred review yourfile.py" -ForegroundColor White
+        Write-Host "  Get started:" -ForegroundColor Cyan
+        Write-Host "    alfred setup" -ForegroundColor Yellow
+        Write-Host "    alfred review yourfile.py" -ForegroundColor Yellow
     } else {
-        throw "Command failed"
+        throw "Not working"
     }
 } catch {
-    Write-Host "[INFO] 'alfred' command not available yet" -ForegroundColor Yellow
     Write-Host ""
-    Write-Host "This is normal. Alfred will work after you:" -ForegroundColor Cyan
-    Write-Host "  1. Close this PowerShell window" -ForegroundColor White
-    Write-Host "  2. Open a NEW PowerShell window" -ForegroundColor White
-    Write-Host "  3. Type: alfred --help" -ForegroundColor White
-    Write-Host ""
-    Write-Host "Or use the full path right now:" -ForegroundColor Cyan  
-    Write-Host "  $env:USERPROFILE\.local\bin\alfred.exe --help" -ForegroundColor Yellow
+    Write-Host "Try: alfred setup" -ForegroundColor White
 }
-
-Write-Host ""
-Write-Host ""
-
-Read-Host "Press Enter to exit"
