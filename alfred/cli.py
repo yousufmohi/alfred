@@ -8,6 +8,7 @@ from rich.panel import Panel
 from rich.markdown import Markdown
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.prompt import Prompt, Confirm
+from rich.table import Table
 from rich import print as rprint
 from pathlib import Path
 from typing import Optional
@@ -111,6 +112,11 @@ def review(
         "--verbose",
         "-v",
         help="Show detailed output"
+    ),
+    show_cost: bool = typer.Option(
+        True,
+        "--show-cost/--no-cost",
+        help="Show cost information after review"
     )
 ):
     """
@@ -170,12 +176,25 @@ def review(
             console=console
         ) as progress:
             task = progress.add_task("🤖 Claude is reviewing your code...", total=None)
-            review_result = agent.review_code(filepath, focus)
+            review_result, cost_info = agent.review_code(filepath, focus, track_cost=show_cost)
         
         # Display results in a nice panel
         console.print("\n" + "="*70 + "\n")
         md = Markdown(review_result)
         console.print(Panel(md, title="📋 Code Review Results", border_style="green"))
+        
+        # Show cost information if enabled
+        if show_cost and cost_info:
+            console.print("\n💰 [bold cyan]Cost Information:[/bold cyan]")
+            console.print(f"   Input tokens:  {cost_info['input_tokens']:,}")
+            console.print(f"   Output tokens: {cost_info['output_tokens']:,}")
+            console.print(f"   Total tokens:  {cost_info['total_tokens']:,}")
+            console.print(f"   Cost:          [yellow]${cost_info['cost']:.4f}[/yellow]")
+            
+            # Show session total
+            session = agent.cost_tracker.get_session_summary()
+            if session['reviews'] > 1:
+                console.print(f"\n   Session total: ${session['total_cost']:.4f} ({session['reviews']} reviews)")
         
         console.print("\n[green]✅ Review complete![/green]\n")
         
@@ -296,6 +315,93 @@ def config_cmd(
             console.print("\n[cyan]Run 'alfred setup' to configure your API key[/cyan]")
         
         console.print()
+
+
+@app.command()
+def costs(
+    limit: int = typer.Option(
+        10,
+        "--limit",
+        "-n",
+        help="Number of recent reviews to show"
+    ),
+    total: bool = typer.Option(
+        False,
+        "--total",
+        "-t",
+        help="Show total usage statistics"
+    )
+):
+    """
+    View cost tracking and usage statistics
+    
+    Example:
+        alfred costs              # Show recent reviews
+        alfred costs --total      # Show all-time stats
+        alfred costs --limit 20   # Show last 20 reviews
+    """
+    console.print("\n💰 [bold cyan]Alfred Cost Tracker[/bold cyan]\n")
+    
+    config = Config()
+    from .cost_tracker import CostTracker
+    tracker = CostTracker(config.config_dir)
+    
+    if total:
+        # Show all-time statistics
+        stats = tracker.get_total_usage()
+        
+        if stats['total_reviews'] == 0:
+            console.print("[yellow]No reviews tracked yet.[/yellow]")
+            console.print("\n[dim]Costs will be tracked automatically when you run 'alfred review'[/dim]\n")
+            return
+        
+        console.print("[bold]All-Time Statistics:[/bold]")
+        console.print(f"  Total reviews:    {stats['total_reviews']:,}")
+        console.print(f"  Total tokens:     {stats['total_tokens']:,}")
+        console.print(f"  Total cost:       [yellow]${stats['total_cost']:.2f}[/yellow]")
+        console.print(f"  Avg per review:   ${stats['avg_cost_per_review']:.4f}")
+        console.print(f"  Avg tokens/review: {stats['avg_tokens_per_review']:.0f}")
+    else:
+        # Show recent reviews
+        recent = tracker.get_recent_reviews(limit)
+        
+        if not recent:
+            console.print("[yellow]No reviews tracked yet.[/yellow]")
+            console.print("\n[dim]Costs will be tracked automatically when you run 'alfred review'[/dim]\n")
+            return
+        
+        console.print(f"[bold]Last {len(recent)} Reviews:[/bold]\n")
+        
+        table = Table(show_header=True, header_style="bold cyan")
+        table.add_column("Date", style="dim")
+        table.add_column("File", style="cyan")
+        table.add_column("Tokens", justify="right")
+        table.add_column("Cost", justify="right", style="yellow")
+        
+        for review in recent:
+            # Parse timestamp
+            from datetime import datetime
+            dt = datetime.fromisoformat(review['timestamp'])
+            date_str = dt.strftime("%b %d, %H:%M")
+            
+            # Get filename or show "N/A"
+            filename = review.get('filepath', 'N/A')
+            if filename and filename != 'N/A':
+                filename = Path(filename).name
+            
+            # Format numbers
+            tokens = f"{review['total_tokens']:,}"
+            cost = f"${review['cost']:.4f}"
+            
+            table.add_row(date_str, filename, tokens, cost)
+        
+        console.print(table)
+        
+        # Show total for displayed reviews
+        total_cost = sum(r['cost'] for r in recent)
+        console.print(f"\n[dim]Total shown: ${total_cost:.4f}[/dim]")
+    
+    console.print()
 
 
 @app.command()
