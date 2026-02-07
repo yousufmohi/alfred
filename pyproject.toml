@@ -13,6 +13,8 @@ typer = ">=0.16.0"
 rich = "^13.7.0"
 click = "<8.2.0"
 python-dotenv = "^1.0.0"
+PyGithub = "^2.1.1"
+requests = "^2.31.0"
 
 [poetry.group.dev.dependencies]
 pyinstaller = "^6.3.0"

@@ -65,3 +65,83 @@ Provide your review in this format:
 ## Overall Score: X/10
 [Your rating with brief justification]
 """
+
+
+def get_pr_review_prompt(pr_info: dict, diff: str, focus: str = "general") -> str:
+    """
+    Generate a review prompt for a Pull Request
+    
+    Args:
+        pr_info: PR metadata dict
+        diff: Unified diff string
+        focus: Review focus area
+        
+    Returns:
+        Formatted prompt string
+    """
+    focus_instructions = {
+        "general": "Review for bugs, code quality, best practices, breaking changes, and potential issues.",
+        "security": "Focus on security vulnerabilities, injection risks, authentication issues, and data exposure in the changes.",
+        "performance": "Analyze the changes for performance impact, inefficient algorithms, and resource usage.",
+        "style": "Check code style consistency, naming conventions, and readability in the changes.",
+        "bugs": "Hunt for logical errors, edge cases, race conditions, and runtime errors introduced by the changes."
+    }
+    
+    instruction = focus_instructions.get(focus, focus_instructions["general"])
+    
+    # Truncate diff if too large
+    max_diff_size = 100000
+    if len(diff) > max_diff_size:
+        diff = diff[:max_diff_size] + f"\n\n[... diff truncated, total size: {len(diff)} chars]"
+    
+    return f"""Please review this Pull Request.
+
+## PR Information
+- **Number:** #{pr_info.get('number', 'N/A')}
+- **Title:** {pr_info.get('title', 'N/A')}
+- **Author:** {pr_info.get('author', 'N/A')}
+- **Files Changed:** {pr_info.get('files_changed', 0)}
+- **Additions:** +{pr_info.get('additions', 0)}
+- **Deletions:** -{pr_info.get('deletions', 0)}
+- **Description:** {pr_info.get('description', 'No description provided')[:500]}
+
+## Review Focus
+{instruction}
+
+## Changes (Unified Diff)
+```diff
+{diff}
+```
+
+Provide your review in this format:
+
+## 📋 Summary
+[Brief overview of the PR - what does it do? Is it good to merge?]
+
+## ⚠️ Issues Found
+
+### 🚨 Critical Issues
+[Blocking issues that must be fixed before merging]
+
+### ⚡ High Priority
+[Important issues that should be addressed]
+
+### 💡 Medium Priority
+[Good-to-have improvements]
+
+### 🎨 Low Priority / Suggestions
+[Style improvements and minor suggestions]
+
+## ✅ Positive Aspects
+[What's done well in this PR]
+
+## 🎯 Recommendation
+- [ ] **Approve** - Ready to merge
+- [ ] **Request Changes** - Issues must be fixed
+- [ ] **Comment** - Suggestions but okay to merge
+
+[Your recommendation with brief justification]
+
+## 📊 Overall Quality Score: X/10
+[Brief explanation of the score]
+"""
