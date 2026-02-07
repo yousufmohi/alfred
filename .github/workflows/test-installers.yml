@@ -7,8 +7,6 @@ on:
       - 'install.sh'
       - 'install.bat'
       - '.github/workflows/test-installers.yml'
-  push:
-    branches: [ main ]
 
 jobs:
   test-bash-installer:
