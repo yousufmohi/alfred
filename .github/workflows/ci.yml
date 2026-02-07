@@ -35,16 +35,16 @@ jobs:
     
     - name: Check code formatting with black
       run: |
-        poetry run black --check codebot/
+        poetry run black --check alfred/
     
     - name: Lint with flake8
       run: |
-        poetry run flake8 codebot/ --max-line-length=100 --ignore=E203,W503
+        poetry run flake8 alfred/ --max-line-length=100 --ignore=E203,W503
       continue-on-error: true
     
     - name: Type check with mypy
       run: |
-        poetry run mypy codebot/ --ignore-missing-imports
+        poetry run mypy alfred/ --ignore-missing-imports
       continue-on-error: true
     
     - name: Test CLI installation
