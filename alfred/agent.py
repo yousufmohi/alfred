@@ -5,9 +5,10 @@ Core code review agent
 import anthropic
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict
 from .prompts import SYSTEM_PROMPT, get_review_prompt
 from .config import Config
+from .cost_tracker import CostTracker
 
 
 class CodeReviewAgent:
@@ -26,6 +27,7 @@ class CodeReviewAgent:
         
         self.client = anthropic.Anthropic(api_key=self.api_key)
         self.model = "claude-sonnet-4-20250514"
+        self.cost_tracker = CostTracker(config.config_dir)
     
     def read_file(self, filepath: str) -> str:
         """Read code file from disk"""
@@ -48,8 +50,9 @@ class CodeReviewAgent:
         self, 
         filepath: str, 
         focus: str = "general",
-        max_tokens: int = 4000
-    ) -> str:
+        max_tokens: int = 4000,
+        track_cost: bool = True
+    ) -> tuple[str, Optional[Dict]]:
         """
         Review a code file
         
@@ -80,9 +83,16 @@ class CodeReviewAgent:
                 }
             ]
         )
+
+        cost_info = None
+        if track_cost:
+            cost_info = self.cost_tracker.track_review(message.usage, filepath)
         
         # Extract response
-        return message.content[0].text
+        review_text = message.content[0].text
+        
+        return review_text, cost_info
+        
     
     def review_multiple(self, filepaths: list[str], focus: str = "general") -> dict[str, str]:
         """Review multiple files"""
@@ -90,7 +100,8 @@ class CodeReviewAgent:
         
         for filepath in filepaths:
             try:
-                results[filepath] = self.review_code(filepath, focus)
+                review_text, _ = self.review_code(filepath, focus)
+                results[filepath] = review_text
             except Exception as e:
                 results[filepath] = f"Error reviewing file: {str(e)}"
         
