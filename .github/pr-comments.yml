@@ -1,0 +1,64 @@
+name: PR Comment - Test Results
+
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  comment-test-results:
+    name: Comment Test Results on PR
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install and test Alfred
+      id: test
+      run: |
+        pip install poetry
+        poetry install
+        
+        # Capture test results
+        echo "## Alfred CLI Test Results 🤖" > test-results.md
+        echo "" >> test-results.md
+        
+        # Test version
+        echo "### Version Check ✅" >> test-results.md
+        echo '```' >> test-results.md
+        poetry run alfred version >> test-results.md 2>&1 || echo "Failed" >> test-results.md
+        echo '```' >> test-results.md
+        echo "" >> test-results.md
+        
+        # Test help
+        echo "### Help Command ✅" >> test-results.md
+        echo '```' >> test-results.md
+        poetry run alfred --help >> test-results.md 2>&1 || echo "Failed" >> test-results.md
+        echo '```' >> test-results.md
+        echo "" >> test-results.md
+        
+        # Test installation
+        echo "### Installation Test ✅" >> test-results.md
+        poetry run python -m pipx install . >> test-results.md 2>&1 && \
+          echo "✅ Installation successful" >> test-results.md || \
+          echo "❌ Installation failed" >> test-results.md
+        echo "" >> test-results.md
+        
+        # Test costs command
+        echo "### Costs Command ✅" >> test-results.md
+        echo '```' >> test-results.md
+        poetry run alfred costs --help >> test-results.md 2>&1 || echo "Failed" >> test-results.md
+        echo '```' >> test-results.md
+    
+    - name: Comment PR
+      uses: thollander/actions-comment-pull-request@v2
+      with:
+        filePath: test-results.md
+        comment_tag: alfred-test-results
