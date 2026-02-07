@@ -14,6 +14,11 @@ from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv
 import sys
+import re
+import subprocess
+import webbrowser
+from .github_integration import GitHubIntegration
+from .github_auth import GitHubAuth
 
 from .agent import CodeReviewAgent
 from .config import Config
@@ -412,6 +417,278 @@ def version():
     console.print("[cyan]Model:[/cyan] claude-sonnet-4-20250514")
     console.print("[cyan]Config:[/cyan] ~/.alfred/config.json")
 
+
+
+@app.command(name="github-login")
+def github_login():
+    """
+        Login to GitHub (opens browser)
+        Example:
+            alfred github-login
+    """ 
+    print_banner()
+
+    config = Config()
+    github_auth = GitHubAuth(config.config_dir)
+
+    # Check if already logged in
+    if github_auth.is_logged_in():
+        user_info = github_auth.get_user_info()
+        username = user_info.get('login', 'Unknown') if user_info else 'Unknown'
+        
+        console.print(f"\n[yellow]Already logged in as:[/yellow] [cyan]{username}[/cyan]")
+        
+        reauth = Confirm.ask("Would you like to login again?", default=False)
+        if not reauth:
+            console.print("[green]Keeping current session[/green]\n")
+            return
+        
+        github_auth.logout()
+
+    console.print("\n[bold cyan]🔐 GitHub Login[/bold cyan]\n")
+    console.print("Alfred needs permission to access your GitHub repositories.")
+    console.print("[dim]This uses GitHub's secure OAuth flow - Alfred never sees your password.[/dim]\n")
+
+    # Start login flow
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console
+    ) as progress:
+        task = progress.add_task("Initiating GitHub login...", total=None)
+        login_result = github_auth.login()
+        
+        if not login_result.get('success'):
+            console.print(f"[red]❌ {login_result.get('error', 'Login failed')}[/red]\n")
+            return
+
+    # Display auth code
+    user_code = login_result['user_code']
+    verification_uri = login_result['verification_uri']
+    device_code = login_result['device_code']
+    interval = login_result.get('interval', 5)
+
+    # Create display panel
+    auth_panel = Panel(
+        f"[bold yellow]{user_code}[/bold yellow]\n\n"
+        f"[dim]Visit: {verification_uri}[/dim]",
+        title="🔑 Your Code",
+        border_style="cyan"
+    )
+
+    console.print("\n")
+    console.print(auth_panel)
+    console.print("\n[bold]Steps:[/bold]")
+    console.print("  1. A browser window will open")
+    console.print("  2. Enter the code shown above")
+    console.print("  3. Authorize Alfred")
+    console.print("\n[dim]Waiting for authorization...[/dim]\n")
+
+    # Open browser
+    try:
+        webbrowser.open(verification_uri)
+    except:
+        console.print("[yellow]⚠️  Could not open browser automatically[/yellow]")
+
+    # Poll for token
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console
+    ) as progress:
+        task = progress.add_task("Waiting for authorization...", total=None)
+        result = github_auth.poll_for_token(device_code, interval)
+
+    if result['success']:
+        user_info = github_auth.get_user_info()
+        username = user_info.get('login', 'Unknown') if user_info else 'Unknown'
+        
+        console.print("\n[green]✅ Successfully logged in to GitHub![/green]")
+        console.print(f"[green]Logged in as:[/green] [cyan]{username}[/cyan]\n")
+        console.print("[dim]You can now use:[/dim]")
+        console.print("  • [cyan]alfred review-pr <url>[/cyan]")
+        console.print("  • [cyan]alfred review-pr <number> --comment[/cyan]\n")
+    else:
+        error = result.get('error', 'Unknown error')
+        console.print(f"\n[red]❌ Login failed: {error}[/red]\n")
+
+
+@app.command(name="github-status")
+def github_status():
+    """
+    Check GitHub login status
+    Example:
+        alfred github-status
+    """
+    config = Config()
+    github_auth = GitHubAuth(config.config_dir)
+
+    console.print("\n[bold cyan]GitHub Status[/bold cyan]\n")
+
+    if not github_auth.is_logged_in():
+        console.print("[yellow]Not logged in[/yellow]")
+        console.print("\n[dim]Run:[/dim] [cyan]alfred github-login[/cyan]\n")
+        return
+
+    user_info = github_auth.get_user_info()
+    token_info = github_auth.get_token_info()
+
+    if user_info:
+        console.print(f"[green]✅ Logged in[/green]")
+        console.print(f"\n[bold]User:[/bold] {user_info.get('login')}")
+        console.print(f"[bold]Name:[/bold] {user_info.get('name', 'N/A')}")
+
+    if token_info:
+        hours_left = token_info.get('hours_until_expiry')
+        console.print(f"\n[bold]Token expires in:[/bold] {hours_left} hours")
+
+    console.print()
+
+@app.command(name="github-logout")
+def github_logout():
+    """
+    Logout from GitHub
+    Example:
+        alfred github-logout
+    """
+    config = Config()
+    github_auth = GitHubAuth(config.config_dir)
+
+    if not github_auth.is_logged_in():
+        console.print("\n[yellow]Not logged in[/yellow]\n")
+        return
+
+    user_info = github_auth.get_user_info()
+    username = user_info.get('login') if user_info else 'Unknown'
+
+    console.print(f"\n[yellow]Logged in as:[/yellow] [cyan]{username}[/cyan]")
+
+    confirm = Confirm.ask("Are you sure you want to logout?", default=False)
+
+    if confirm:
+        github_auth.logout()
+        console.print("\n[green]✅ Logged out successfully[/green]\n")
+    else:
+        console.print("\n[yellow]Logout cancelled[/yellow]\n")
+
+@app.command()
+def review_pr(
+    pr_url_or_number: str = typer.Argument(..., help="PR URL or number"),
+    comment: bool = typer.Option(False, "--comment", "-c", help="Post review as comment"),
+    focus: str = typer.Option("general", "--focus", "-f", help="Review focus"),
+    api_key: Optional[str] = typer.Option(None, "--api-key", "-k", envvar="ANTHROPIC_API_KEY"),
+    show_cost: bool = typer.Option(True, "--show-cost/--no-cost"),
+    verbose: bool = typer.Option(False, "--verbose", "-v")
+    ):
+    
+    """
+    Review a GitHub Pull Request with AI
+    Examples:
+        alfred review-pr https://github.com/user/repo/pull/123
+        alfred review-pr 123 --comment
+    """
+
+    if verbose:
+        print_banner()
+
+    # Check API key
+    config = Config()
+    anthropic_key = config.get_api_key(api_key)
+
+    if not anthropic_key:
+        console.print("[red]❌ Anthropic API key required. Run 'alfred setup'[/red]")
+        sys.exit(1)
+
+    # Check GitHub auth
+    github_auth = GitHubAuth(config.config_dir)
+
+    if not github_auth.is_logged_in():
+        console.print("\n[red]❌ Not logged in to GitHub[/red]")
+        console.print("\n[cyan]Please login first:[/cyan]")
+        console.print("  alfred github-login\n")
+        sys.exit(1)
+
+    try:
+        gh = GitHubIntegration(github_auth=github_auth)
+        
+        # Get user
+        user_info = github_auth.get_user_info()
+        username = user_info.get('login') if user_info else 'Unknown'
+        console.print(f"\n[dim]Using GitHub account:[/dim] [cyan]{username}[/cyan]")
+        
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console
+        ) as progress:
+            task = progress.add_task("Fetching PR...", total=None)
+            
+            if pr_url_or_number.startswith('http'):
+                owner, repo, pr_number = gh.parse_pr_url(pr_url_or_number)
+            elif pr_url_or_number.isdigit():
+                pr_number = int(pr_url_or_number)
+                # Infer repo from git
+                try:
+                    result = subprocess.run(
+                        ['git', 'remote', 'get-url', 'origin'],
+                        capture_output=True, text=True, check=True
+                    )
+                    match = re.search(r'github\.com[:/]([^/]+)/([^/\.]+)', result.stdout.strip())
+                    if match:
+                        owner, repo = match.groups()
+                    else:
+                        raise ValueError("Could not parse repository")
+                except:
+                    console.print("[red]❌ Could not determine repository. Use full PR URL.[/red]")
+                    sys.exit(1)
+            else:
+                console.print("[red]❌ Invalid PR URL or number[/red]")
+                sys.exit(1)
+            
+            pr = gh.get_pr(owner, repo, pr_number)
+            pr_info = gh.get_pr_info(pr)
+            diff = gh.get_pr_diff(pr)
+        
+        # Show PR info
+        console.print(f"\n📄 PR #{pr_info['number']}: [cyan]{pr_info['title']}[/cyan]")
+        console.print(f"📊 Changes: [green]+{pr_info['additions']}[/green] [red]-{pr_info['deletions']}[/red]\n")
+        
+        # Review
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console
+        ) as progress:
+            task = progress.add_task("🤖 Reviewing...", total=None)
+            agent = CodeReviewAgent(api_key=anthropic_key)
+            review_text, cost_info = agent.review_pr_diff(pr_info, diff, focus, track_cost=show_cost)
+        
+        # Display
+        console.print("\n" + "="*70 + "\n")
+        md = Markdown(review_text)
+        console.print(Panel(md, title="📋 PR Review", border_style="green"))
+        
+        if show_cost and cost_info:
+            console.print(f"\n💰 Cost: [yellow]${cost_info['cost']:.4f}[/yellow]")
+        
+        # Post comment
+        if comment:
+            console.print("\n📝 Posting...\n")
+            formatted = gh.format_review_for_pr(review_text, pr_info)
+            try:
+                gh.post_pr_comment(pr, formatted)
+                console.print(f"[green]✅ Posted to PR #{pr_number}![/green]\n")
+            except Exception as e:
+                console.print(f"[red]❌ Failed: {str(e)}[/red]\n")
+        
+        console.print("\n[green]✅ Done![/green]\n")
+        
+    except Exception as e:
+        console.print(f"[red]❌ Error: {str(e)}[/red]")
+        if verbose:
+            import traceback
+            console.print("\n[dim]" + traceback.format_exc() + "[/dim]")
+        sys.exit(1)
 
 if __name__ == "__main__":
     app()

@@ -6,7 +6,7 @@ import anthropic
 import os
 from pathlib import Path
 from typing import Optional, Dict
-from .prompts import SYSTEM_PROMPT, get_review_prompt
+from .prompts import SYSTEM_PROMPT, get_review_prompt, get_pr_review_prompt
 from .config import Config
 from .cost_tracker import CostTracker
 
@@ -60,9 +60,10 @@ class CodeReviewAgent:
             filepath: Path to the code file
             focus: Review focus area (general, security, performance, style, bugs)
             max_tokens: Maximum tokens for response
+            track_cost: Whether to track and return cost information
             
         Returns:
-            Review as formatted text
+            Tuple of (review text, cost info dict or None)
         """
         # Read the code
         code = self.read_file(filepath)
@@ -92,7 +93,54 @@ class CodeReviewAgent:
         review_text = message.content[0].text
         
         return review_text, cost_info
+    
+    def review_pr_diff(
+        self,
+        pr_info: Dict,
+        diff: str,
+        focus: str = "general",
+        max_tokens: int = 8000,
+        track_cost: bool = True
+    ) -> tuple[str, Optional[Dict]]:
+        """
+        Review a Pull Request diff
         
+        Args:
+            pr_info: PR metadata dict
+            diff: Unified diff string
+            focus: Review focus area
+            max_tokens: Maximum tokens for response
+            track_cost: Whether to track costs
+            
+        Returns:
+            Tuple of (review text, cost info dict or None)
+        """
+        # Generate PR review prompt
+        user_prompt = get_pr_review_prompt(pr_info, diff, focus)
+        
+        # Call Claude
+        message = self.client.messages.create(
+            model=self.model,
+            max_tokens=max_tokens,
+            system=SYSTEM_PROMPT,
+            messages=[
+                {
+                    "role": "user",
+                    "content": user_prompt
+                }
+            ]
+        )
+        
+        # Track cost if enabled
+        cost_info = None
+        if track_cost:
+            pr_identifier = f"PR#{pr_info.get('number', 'unknown')}"
+            cost_info = self.cost_tracker.track_review(message.usage, pr_identifier)
+        
+        # Extract response
+        review_text = message.content[0].text
+        
+        return review_text, cost_info
     
     def review_multiple(self, filepaths: list[str], focus: str = "general") -> dict[str, str]:
         """Review multiple files"""
