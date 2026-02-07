@@ -3,8 +3,6 @@ name: CI - Test Alfred
 on:
   pull_request:
     branches: [ main, develop ]
-  push:
-    branches: [ main, develop ]
 
 jobs:
   test:
@@ -32,6 +30,7 @@ jobs:
     - name: Install dependencies
       run: |
         poetry install
+        poetry add --group dev black flake8 mypy
     
     - name: Check code formatting with black
       run: |
