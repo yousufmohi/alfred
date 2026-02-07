@@ -1,0 +1,100 @@
+name: Test Installers
+
+on:
+  pull_request:
+    paths:
+      - 'install.ps1'
+      - 'install.sh'
+      - 'install.bat'
+      - '.github/workflows/test-installers.yml'
+  push:
+    branches: [ main ]
+
+jobs:
+  test-bash-installer:
+    name: Test Bash Installer (Linux/Mac)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Test bash installer (dry run)
+      run: |
+        # Mock the installer by checking syntax
+        bash -n install.sh
+        echo "Bash installer syntax is valid"
+    
+    - name: Check if installer would run
+      run: |
+        # Test that all required commands exist
+        command -v python3 >/dev/null 2>&1 || { echo "Python required"; exit 1; }
+        command -v pip >/dev/null 2>&1 || { echo "pip required"; exit 1; }
+        echo "All prerequisites available"
+
+  test-powershell-installer:
+    name: Test PowerShell Installer (Windows)
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Test PowerShell installer syntax
+      shell: pwsh
+      run: |
+        # Test PowerShell syntax
+        $errors = $null
+        $null = [System.Management.Automation.PSParser]::Tokenize(
+          (Get-Content .\install.ps1 -Raw), 
+          [ref]$errors
+        )
+        if ($errors.Count -gt 0) {
+          Write-Host "PowerShell syntax errors found:"
+          $errors | ForEach-Object { Write-Host $_ }
+          exit 1
+        }
+        Write-Host "PowerShell installer syntax is valid"
+    
+    - name: Check Python availability
+      shell: pwsh
+      run: |
+        python --version
+        pip --version
+        Write-Host "Python and pip are available"
+
+  test-cmd-installer:
+    name: Test CMD Installer (Windows)
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Test CMD installer
+      shell: cmd
+      run: |
+        REM Just verify the file exists and has content
+        if not exist install.bat (
+          echo install.bat not found
+          exit /b 1
+        )
+        echo CMD installer file exists
