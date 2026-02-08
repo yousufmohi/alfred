@@ -19,7 +19,7 @@ import subprocess
 import webbrowser
 from .github_integration import GitHubIntegration
 from .github_auth import GitHubAuth
-
+from .review_history import ReviewHistory
 from .agent import CodeReviewAgent
 from .config import Config
 
@@ -36,15 +36,9 @@ console = Console()
 
 
 def print_banner():
-    """Print cool ASCII banner"""
-    banner = """
-╔═══════════════════════════════════════╗
-║        🤖 Alfred v0.1.0              ║
-║    AI-Powered Code Review             ║
-╚═══════════════════════════════════════╝
-    """
-    console.print(banner, style="bold cyan")
-
+    """Print simple banner"""
+    console.print("\n[bold cyan]🤖 Alfred[/bold cyan] [dim]v0.1.0[/dim]")
+    console.print("[dim]AI-Powered Code Review[/dim]\n")
 
 def interactive_setup() -> Optional[str]:
     """
@@ -95,6 +89,223 @@ def interactive_setup() -> Optional[str]:
     
     return api_key
 
+@app.command()
+def history(
+    action: str = typer.Argument("list", help="Action: list, show, search, stats, clear"),
+    value: Optional[str] = typer.Argument(None, help="Review ID or search query"),
+    limit: int = typer.Option(10, "--limit", "-n", help="Number of reviews to show"),
+    file: Optional[str] = typer.Option(None, "--file", "-f", help="Filter by filename")
+):
+    """
+    View review history (git log style)
+    
+    Examples:
+        alfred history                  # List recent reviews
+        alfred history list --limit 20  # Last 20 reviews
+        alfred history show 5           # Show review #5
+        alfred history search "SQL"     # Search for SQL issues
+        alfred history stats            # Show statistics
+        alfred history clear            # Clear all history
+        alfred history --file script.py # Reviews of script.py
+    """
+    config = Config()
+    history_tracker = ReviewHistory(config.config_dir)
+    
+    if action == "list" or action == "history":
+        # List recent reviews (git log style!)
+        if file:
+            reviews = history_tracker.get_by_file(file)
+            console.print(f"\n[bold cyan]📚 Review History for {file}[/bold cyan]\n")
+        else:
+            reviews = history_tracker.get_recent(limit)
+            console.print(f"\n[bold cyan]📚 Recent Reviews[/bold cyan]\n")
+        
+        if not reviews:
+            console.print("[yellow]No reviews found yet[/yellow]\n")
+            console.print("[dim]Reviews will appear here after running:[/dim]")
+            console.print("  [cyan]alfred review <file>[/cyan]\n")
+            return
+        
+        # Display in git log style
+        for review in reviews:
+            # Review ID (like git commit hash)
+            console.print(f"[yellow]review {review['id']}[/yellow]")
+            
+            # File and date
+            console.print(f"📄 File:  [cyan]{review['filename']}[/cyan]")
+            console.print(f"📅 Date:  {review['date']}")
+            
+            # Focus area with emoji
+            focus_emojis = {
+                "general": "🔍",
+                "security": "🔒",
+                "performance": "⚡",
+                "style": "🎨",
+                "bugs": "🐛"
+            }
+            emoji = focus_emojis.get(review['focus'], "🔍")
+            console.print(f"{emoji} Focus: {review['focus']}")
+            
+            # Score with color coding
+            if review['score']:
+                score = review['score']
+                if score >= 8:
+                    color = "green"
+                elif score >= 6:
+                    color = "yellow"
+                else:
+                    color = "red"
+                console.print(f"⭐ Score: [{color}]{score}/10[/{color}]")
+            
+            # Cost
+            if review['cost']:
+                console.print(f"💰 Cost:  [yellow]${review['cost']:.4f}[/yellow]")
+            
+            console.print()  # Blank line between reviews
+        
+        console.print(f"[dim]View details:[/dim] [cyan]alfred history show <id>[/cyan]\n")
+    
+    elif action == "show":
+        # Show specific review
+        if value is None:
+            console.print("[red]❌ Please specify review ID[/red]")
+            console.print("\n[cyan]Example:[/cyan] alfred history show 5\n")
+            sys.exit(1)
+        
+        try:
+            review_id = int(value)
+        except ValueError:
+            console.print("[red]❌ Review ID must be a number[/red]")
+            sys.exit(1)
+        
+        review = history_tracker.get_review(review_id)
+        
+        if not review:
+            console.print(f"[red]❌ Review #{review_id} not found[/red]\n")
+            sys.exit(1)
+        
+        # Display review header
+        console.print(f"\n[bold cyan]Review #{review['id']}[/bold cyan]\n")
+        console.print(f"📄 File:  [cyan]{review['filepath']}[/cyan]")
+        console.print(f"📅 Date:  {review['date']}")
+        console.print(f"🔍 Focus: {review['focus']}")
+        
+        if review['score']:
+            score = review['score']
+            if score >= 8:
+                color = "green"
+            elif score >= 6:
+                color = "yellow"
+            else:
+                color = "red"
+            console.print(f"⭐ Score: [{color}]{score}/10[/{color}]")
+        
+        if review['cost']:
+            console.print(f"💰 Cost:  [yellow]${review['cost']:.4f}[/yellow]")
+        
+        console.print("\n" + "="*70 + "\n")
+        
+        # Show review content
+        md = Markdown(review['review'])
+        console.print(Panel(md, title="📋 Review", border_style="cyan"))
+        console.print()
+    
+    elif action == "search":
+        # Search reviews
+        if value is None:
+            console.print("[red]❌ Please specify search query[/red]")
+            console.print("\n[cyan]Example:[/cyan] alfred history search SQL\n")
+            sys.exit(1)
+        
+        reviews = history_tracker.search(value)
+        
+        console.print(f"\n[bold cyan]🔍 Search: '{value}'[/bold cyan]\n")
+        
+        if not reviews:
+            console.print("[yellow]No matching reviews found[/yellow]\n")
+            return
+        
+        console.print(f"[green]Found {len(reviews)} match{'es' if len(reviews) != 1 else ''}[/green]\n")
+        
+        # Display search results (compact)
+        for review in reviews[:limit]:
+            console.print(f"[yellow]review {review['id']}[/yellow] - [cyan]{review['filename']}[/cyan]")
+            console.print(f"  📅 {review['date']}")
+            if review['score']:
+                score = review['score']
+                if score >= 8:
+                    color = "green"
+                elif score >= 6:
+                    color = "yellow"
+                else:
+                    color = "red"
+                console.print(f"  ⭐ [{color}]{score}/10[/{color}]")
+            console.print()
+        
+        if len(reviews) > limit:
+            console.print(f"[dim]Showing {limit} of {len(reviews)}. Use --limit to see more.[/dim]\n")
+        
+        console.print(f"[dim]View details:[/dim] [cyan]alfred history show <id>[/cyan]\n")
+    
+    elif action == "stats":
+        # Show statistics
+        stats = history_tracker.get_stats()
+        
+        console.print("\n[bold cyan]📊 Review Statistics[/bold cyan]\n")
+        
+        if stats['total_reviews'] == 0:
+            console.print("[yellow]No reviews yet[/yellow]\n")
+            return
+        
+        console.print(f"📝 Total Reviews:     {stats['total_reviews']}")
+        console.print(f"📂 Files Reviewed:    {stats['files_reviewed']}")
+        console.print(f"⭐ Average Score:     {stats['avg_score']:.1f}/10")
+        
+        if stats['total_cost'] > 0:
+            console.print(f"💰 Total Cost:        [yellow]${stats['total_cost']:.2f}[/yellow]")
+        
+        # Focus breakdown
+        if stats['focus_breakdown']:
+            console.print(f"\n[bold]Reviews by Focus:[/bold]")
+            for focus, count in stats['focus_breakdown'].items():
+                focus_emojis = {
+                    "general": "🔍",
+                    "security": "🔒",
+                    "performance": "⚡",
+                    "style": "🎨",
+                    "bugs": "🐛"
+                }
+                emoji = focus_emojis.get(focus, "🔍")
+                console.print(f"  {emoji} {focus}: {count}")
+        
+        console.print()
+    
+    elif action == "clear":
+        # Clear all history
+        stats = history_tracker.get_stats()
+        
+        if stats['total_reviews'] == 0:
+            console.print("\n[yellow]No reviews to clear[/yellow]\n")
+            return
+        
+        console.print(f"\n[yellow]⚠️  This will delete {stats['total_reviews']} reviews[/yellow]")
+        confirm = Confirm.ask("Are you sure?", default=False)
+        
+        if confirm:
+            count = history_tracker.clear_all()
+            console.print(f"\n[green]✅ Deleted {count} reviews[/green]\n")
+        else:
+            console.print("\n[yellow]Cancelled[/yellow]\n")
+    
+    else:
+        console.print(f"[red]❌ Unknown action: {action}[/red]\n")
+        console.print("[cyan]Valid actions:[/cyan]")
+        console.print("  alfred history              # List recent")
+        console.print("  alfred history show 5       # Show review #5")
+        console.print("  alfred history search SQL   # Search reviews")
+        console.print("  alfred history stats        # Statistics")
+        console.print("  alfred history clear        # Clear all\n")
+        sys.exit(1)
 
 @app.command()
 def review(
@@ -187,7 +398,16 @@ def review(
         console.print("\n" + "="*70 + "\n")
         md = Markdown(review_result)
         console.print(Panel(md, title="📋 Code Review Results", border_style="green"))
-        
+
+        # save to history
+        history_tracker = ReviewHistory(config.config_dir)
+        review_id = history_tracker.save_review(
+            filepath=filepath,
+            review_text=review_result,
+            focus=focus,
+            cost=cost_info['cost'] if cost_info else None
+        )
+
         # Show cost information if enabled
         if show_cost and cost_info:
             console.print("\n💰 [bold cyan]Cost Information:[/bold cyan]")
