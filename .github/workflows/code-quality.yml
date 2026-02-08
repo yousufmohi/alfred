@@ -1,0 +1,120 @@
+name: Code Quality Checks
+
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  code-quality:
+    name: Code Quality Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        pip install poetry
+        poetry install
+        pip install flake8 pylint black isort radon
+    
+    - name: Run Black (formatting check)
+      id: black
+      run: |
+        echo "## 🎨 Code Formatting" > quality-report.md
+        echo "" >> quality-report.md
+        if poetry run black --check alfred/ 2>&1; then
+          echo "✅ **Black:** All files properly formatted" >> quality-report.md
+        else
+          echo "❌ **Black:** Formatting issues found" >> quality-report.md
+          echo "\`\`\`" >> quality-report.md
+          poetry run black --check alfred/ 2>&1 | head -20 >> quality-report.md || true
+          echo "\`\`\`" >> quality-report.md
+        fi
+        echo "" >> quality-report.md
+      continue-on-error: true
+    
+    - name: Run Flake8 (linting)
+      id: flake8
+      run: |
+        echo "## 🔍 Linting (Flake8)" >> quality-report.md
+        echo "" >> quality-report.md
+        if poetry run flake8 alfred/ --count --select=E9,F63,F7,F82 --show-source --statistics 2>&1; then
+          echo "✅ **Flake8:** No critical issues" >> quality-report.md
+        else
+          echo "❌ **Flake8:** Issues found" >> quality-report.md
+          echo "\`\`\`" >> quality-report.md
+          poetry run flake8 alfred/ --count --select=E9,F63,F7,F82 --show-source --statistics 2>&1 | head -20 >> quality-report.md || true
+          echo "\`\`\`" >> quality-report.md
+        fi
+        echo "" >> quality-report.md
+      continue-on-error: true
+    
+    - name: Run Pylint (code analysis)
+      id: pylint
+      run: |
+        echo "## 📊 Code Analysis (Pylint)" >> quality-report.md
+        echo "" >> quality-report.md
+        SCORE=$(poetry run pylint alfred/ --exit-zero --score=y | grep "Your code has been rated" | awk '{print $7}' || echo "N/A")
+        echo "**Score:** $SCORE/10" >> quality-report.md
+        
+        if [[ $(echo "$SCORE >= 8.0" | bc -l) -eq 1 ]] 2>/dev/null; then
+          echo "✅ **Pylint:** Good code quality ($SCORE/10)" >> quality-report.md
+        else
+          echo "⚠️ **Pylint:** Could be improved ($SCORE/10)" >> quality-report.md
+        fi
+        echo "" >> quality-report.md
+      continue-on-error: true
+    
+    - name: Check import sorting
+      id: isort
+      run: |
+        echo "## 📦 Import Sorting" >> quality-report.md
+        echo "" >> quality-report.md
+        if poetry run isort --check-only alfred/ 2>&1; then
+          echo "✅ **isort:** Imports properly sorted" >> quality-report.md
+        else
+          echo "❌ **isort:** Import sorting issues" >> quality-report.md
+        fi
+        echo "" >> quality-report.md
+      continue-on-error: true
+    
+    - name: Calculate complexity
+      id: complexity
+      run: |
+        echo "## 🧮 Code Complexity" >> quality-report.md
+        echo "" >> quality-report.md
+        echo "\`\`\`" >> quality-report.md
+        radon cc alfred/ -a -nb | head -20 >> quality-report.md
+        echo "\`\`\`" >> quality-report.md
+        echo "" >> quality-report.md
+        
+        AVG=$(radon cc alfred/ -a -nb | grep "Average complexity" | awk '{print $3}' | cut -d'(' -f1 || echo "N/A")
+        if [ ! -z "$AVG" ] && [ "$AVG" != "N/A" ]; then
+          echo "**Average Complexity:** $AVG (lower is better)" >> quality-report.md
+        fi
+        echo "" >> quality-report.md
+      continue-on-error: true
+    
+    - name: Generate summary
+      run: |
+        echo "---" >> quality-report.md
+        echo "" >> quality-report.md
+        echo "💡 **Tip:** Run \`black alfred/\` and \`isort alfred/\` to auto-fix formatting" >> quality-report.md
+    
+    - name: Comment PR
+      uses: thollander/actions-comment-pull-request@v2
+      with:
+        filePath: quality-report.md
+        comment_tag: code-quality-report
