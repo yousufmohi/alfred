@@ -36,15 +36,9 @@ console = Console()
 
 
 def print_banner():
-    """Print cool ASCII banner"""
-    banner = """
-╔═══════════════════════════════════════╗
-║        🤖 Alfred v0.1.0              ║
-║    AI-Powered Code Review             ║
-╚═══════════════════════════════════════╝
-    """
-    console.print(banner, style="bold cyan")
-
+    """Print simple banner"""
+    console.print("\n[bold cyan]🤖 Alfred[/bold cyan] [dim]v0.1.0[/dim]")
+    console.print("[dim]AI-Powered Code Review[/dim]\n")
 
 def interactive_setup() -> Optional[str]:
     """
