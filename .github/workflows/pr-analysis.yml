@@ -1,0 +1,175 @@
+name: PR Size & Impact
+
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  pr-analysis:
+    name: Analyze PR Impact
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Analyze PR changes
+      id: analyze
+      run: |
+        echo "## 📊 PR Impact Analysis" > pr-analysis.md
+        echo "" >> pr-analysis.md
+        
+        # Get changed files
+        git fetch origin main
+        CHANGED_FILES=$(git diff --name-only origin/main..HEAD | wc -l)
+        ADDED=$(git diff --numstat origin/main..HEAD | awk '{sum+=$1} END {print sum}')
+        DELETED=$(git diff --numstat origin/main..HEAD | awk '{sum+=$2} END {print sum}')
+        TOTAL=$((ADDED + DELETED))
+        
+        echo "### Changes Summary" >> pr-analysis.md
+        echo "" >> pr-analysis.md
+        echo "- **Files Changed:** $CHANGED_FILES" >> pr-analysis.md
+        echo "- **Lines Added:** +$ADDED" >> pr-analysis.md
+        echo "- **Lines Deleted:** -$DELETED" >> pr-analysis.md
+        echo "- **Total Changes:** $TOTAL lines" >> pr-analysis.md
+        echo "" >> pr-analysis.md
+        
+        # PR Size classification
+        echo "### PR Size" >> pr-analysis.md
+        echo "" >> pr-analysis.md
+        if [ $TOTAL -lt 50 ]; then
+          echo "🟢 **XS** - Tiny change (< 50 lines)" >> pr-analysis.md
+        elif [ $TOTAL -lt 200 ]; then
+          echo "🟢 **Small** - Easy to review (< 200 lines)" >> pr-analysis.md
+        elif [ $TOTAL -lt 500 ]; then
+          echo "🟡 **Medium** - Moderate review (< 500 lines)" >> pr-analysis.md
+        elif [ $TOTAL -lt 1000 ]; then
+          echo "🟠 **Large** - Needs careful review (< 1000 lines)" >> pr-analysis.md
+        else
+          echo "🔴 **XL** - Consider splitting (> 1000 lines)" >> pr-analysis.md
+        fi
+        echo "" >> pr-analysis.md
+        
+        # File type breakdown
+        echo "### Changed Files by Type" >> pr-analysis.md
+        echo "" >> pr-analysis.md
+        git diff --name-only origin/main..HEAD | sed 's/.*\.//' | sort | uniq -c | sort -rn | head -5 | while read count ext; do
+          echo "- **.$ext:** $count file(s)" >> pr-analysis.md
+        done
+        echo "" >> pr-analysis.md
+    
+    - name: Check for breaking changes
+      run: |
+        echo "### 🔍 Breaking Change Detection" >> pr-analysis.md
+        echo "" >> pr-analysis.md
+        
+        git fetch origin main
+        BREAKING=0
+        
+        # Check for removed functions/classes
+        if git diff origin/main..HEAD | grep "^-def \|^-class " | grep -v "^---" >/dev/null 2>&1; then
+          echo "⚠️ **Functions/Classes Removed:** Potential breaking change" >> pr-analysis.md
+          BREAKING=1
+        fi
+        
+        # Check for changed function signatures
+        if git diff origin/main..HEAD | grep "^-def \|^+def " | grep -v "^---\|^+++" >/dev/null 2>&1; then
+          REMOVED=$(git diff origin/main..HEAD | grep "^-def " | wc -l)
+          ADDED=$(git diff origin/main..HEAD | grep "^+def " | wc -l)
+          if [ $REMOVED -gt 0 ] && [ $ADDED -gt 0 ]; then
+            echo "⚠️ **Function Signatures Changed:** Review for breaking changes" >> pr-analysis.md
+            BREAKING=1
+          fi
+        fi
+        
+        # Check for dependency changes
+        if git diff origin/main..HEAD pyproject.toml | grep "^-\|^+" | grep -v "^---\|^+++" >/dev/null 2>&1; then
+          echo "📦 **Dependencies Changed:** Review pyproject.toml" >> pr-analysis.md
+          BREAKING=1
+        fi
+        
+        if [ $BREAKING -eq 0 ]; then
+          echo "✅ **No obvious breaking changes detected**" >> pr-analysis.md
+        fi
+        echo "" >> pr-analysis.md
+    
+    - name: Check critical files
+      run: |
+        echo "### 🎯 Critical File Changes" >> pr-analysis.md
+        echo "" >> pr-analysis.md
+        
+        git fetch origin main
+        CRITICAL=0
+        
+        # Check if core files changed
+        if git diff --name-only origin/main..HEAD | grep -E "agent.py|cli.py|config.py" >/dev/null; then
+          echo "⚠️ **Core files modified:** Extra attention needed" >> pr-analysis.md
+          git diff --name-only origin/main..HEAD | grep -E "agent.py|cli.py|config.py" | while read file; do
+            echo "  - \`$file\`" >> pr-analysis.md
+          done
+          CRITICAL=1
+        fi
+        
+        # Check if install scripts changed
+        if git diff --name-only origin/main..HEAD | grep -E "install\.(sh|ps1|bat)" >/dev/null; then
+          echo "📦 **Install scripts changed:** Test all platforms" >> pr-analysis.md
+          CRITICAL=1
+        fi
+        
+        # Check if workflows changed
+        if git diff --name-only origin/main..HEAD | grep ".github/workflows" >/dev/null; then
+          echo "⚙️ **CI workflows changed:** Verify before merge" >> pr-analysis.md
+          CRITICAL=1
+        fi
+        
+        if [ $CRITICAL -eq 0 ]; then
+          echo "✅ **No critical files changed**" >> pr-analysis.md
+        fi
+        echo "" >> pr-analysis.md
+    
+    - name: Estimate review time
+      run: |
+        echo "### ⏱️ Estimated Review Time" >> pr-analysis.md
+        echo "" >> pr-analysis.md
+        
+        git fetch origin main
+        TOTAL=$(git diff --numstat origin/main..HEAD | awk '{sum+=$1+$2} END {print sum}')
+        
+        # Rough estimate: 1 minute per 50 lines
+        MINUTES=$((TOTAL / 50))
+        if [ $MINUTES -lt 5 ]; then
+          echo "**~5 minutes** - Quick review ☕" >> pr-analysis.md
+        elif [ $MINUTES -lt 15 ]; then
+          echo "**~$MINUTES minutes** - Standard review" >> pr-analysis.md
+        elif [ $MINUTES -lt 30 ]; then
+          echo "**~$MINUTES minutes** - Detailed review needed" >> pr-analysis.md
+        else
+          echo "**~$MINUTES+ minutes** - Consider splitting PR" >> pr-analysis.md
+        fi
+        echo "" >> pr-analysis.md
+    
+    - name: Generate recommendations
+      run: |
+        echo "---" >> pr-analysis.md
+        echo "" >> pr-analysis.md
+        git fetch origin main
+        TOTAL=$(git diff --numstat origin/main..HEAD | awk '{sum+=$1+$2} END {print sum}')
+        
+        if [ $TOTAL -gt 500 ]; then
+          echo "💡 **Tip:** Large PR - consider splitting into smaller, focused changes" >> pr-analysis.md
+        elif [ $TOTAL -lt 50 ]; then
+          echo "✨ **Nice:** Small, focused change - easy to review!" >> pr-analysis.md
+        else
+          echo "👍 **Good:** Reasonable PR size" >> pr-analysis.md
+        fi
+    
+    - name: Comment PR
+      uses: thollander/actions-comment-pull-request@v2
+      with:
+        filePath: pr-analysis.md
+        comment_tag: pr-impact-analysis
