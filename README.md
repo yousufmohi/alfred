@@ -4,12 +4,10 @@ Alfred is a code reviewing AI agent that reviews your local code and GitHub PR's
 
 ## ✨ Features
 
-- 🔍 **Local Code Reviews** - Review any file with AI analysis
-- 🔒 **GitHub PR Integration** - Review pull requests and post comments
-- 💰 **Cost Tracking** - Monitor API spending with detailed breakdowns
-- 📚 **Review History** - Search and replay past reviews
-- ⚡ **Multiple Focus Areas** - Security, performance, bugs, style, or general
-- 📊 **Balance Tracking** - Never run out of credits unexpectedly
+- **Local Code Reviews** - Review any file with AI analysis
+- **GitHub PR Integration** - Review pull requests and post comments
+- **Cost Tracking** - Monitor API spending with detailed breakdowns
+- **Review History** - Search and replay past reviews
 
 ## 🚀 Quick Start
 
@@ -184,3 +182,4 @@ alfred costs --total                        # See total spending
 - Update balance: `alfred balance set <amount>`
 
 ---
+
