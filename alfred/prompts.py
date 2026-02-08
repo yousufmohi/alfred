@@ -145,3 +145,72 @@ Provide your review in this format:
 ## 📊 Overall Quality Score: X/10
 [Brief explanation of the score]
 """
+
+def get_git_diff_review_prompt(diff: str, focus: str = "general") -> str:
+    """
+    Generate a review prompt for git diff
+    
+    Args:
+        diff: Git diff output (unified diff format)
+        focus: Review focus area
+        
+    Returns:
+        Formatted prompt string
+    """
+    focus_instructions = {
+        "general": "Review for bugs, code quality, breaking changes, and potential issues in the changes.",
+        "security": "Focus on security implications of these changes: new vulnerabilities, exposed data, auth issues.",
+        "performance": "Analyze performance impact of these changes: new bottlenecks, inefficient code, resource usage.",
+        "style": "Check code style consistency, naming conventions, and readability of the changes.",
+        "bugs": "Hunt for bugs introduced by these changes: logic errors, edge cases, potential runtime issues."
+    }
+    
+    instruction = focus_instructions.get(focus, focus_instructions["general"])
+    
+    # Truncate diff if too large
+    max_diff_size = 50000  # ~50KB
+    if len(diff) > max_diff_size:
+        diff = diff[:max_diff_size] + f"\n\n[... diff truncated, total size: {len(diff)} chars]"
+    
+    return f"""Please review these git changes.
+
+## Review Focus
+{instruction}
+
+## Git Diff
+```diff
+{diff}
+```
+
+Provide your review in this format:
+
+## 📋 Summary
+[Brief overview of the changes - what was modified and why?]
+
+## ⚠️ Issues Found
+
+### 🚨 Critical Issues
+[Breaking changes, bugs, or security issues that must be fixed]
+
+### ⚡ High Priority
+[Important issues that should be addressed]
+
+### 💡 Medium Priority
+[Good-to-have improvements]
+
+### 🎨 Low Priority / Suggestions
+[Style improvements and minor suggestions]
+
+## ✅ Positive Aspects
+[What's done well in these changes]
+
+## 🎯 Recommendation
+- [ ] **Safe to commit** - Changes look good
+- [ ] **Fix issues first** - Address problems before committing
+- [ ] **Needs discussion** - Changes require team input
+
+[Your recommendation with brief justification]
+
+## 📊 Overall Quality Score: X/10
+[Brief explanation of the score]
+"""

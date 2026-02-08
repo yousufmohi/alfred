@@ -17,6 +17,8 @@ import sys
 import re
 import subprocess
 import webbrowser
+import subprocess
+from .api_balance_tracker import APIBalanceTracker
 from .github_integration import GitHubIntegration
 from .github_auth import GitHubAuth
 from .review_history import ReviewHistory
@@ -89,6 +91,62 @@ def interactive_setup() -> Optional[str]:
     
     return api_key
 
+# GIT HELPER
+def get_git_diff(staged: bool = True, since: Optional[str] = None) -> tuple[str, str]:
+    """
+    Get git diff
+    
+    Args:
+        staged: Get staged changes (True) or unstaged (False)
+        since: Compare against branch/commit (e.g., 'main', 'HEAD~1')
+        
+    Returns:
+        Tuple of (diff_output, description)
+    """
+    try:
+        if since:
+            # Compare against branch/commit
+            result = subprocess.run(
+                ['git', 'diff', since],
+                capture_output=True,
+                text=True,
+                encoding='utf-8',      
+                errors='replace',  
+                check=True
+            )
+            description = f"changes since {since}"
+        elif staged:
+            # Staged changes
+            result = subprocess.run(
+                ['git', 'diff', '--cached'],
+                capture_output=True,
+                text=True,
+                encoding='utf-8',      
+                errors='replace',  
+                check=True
+            )
+            description = "staged changes"
+        else:
+            # Unstaged changes
+            result = subprocess.run(
+                ['git', 'diff'],
+                capture_output=True,
+                text=True,
+                encoding='utf-8',      
+                errors='replace',  
+                check=True
+            )
+            description = "unstaged changes"
+        
+        return result.stdout, description
+    
+    except subprocess.CalledProcessError as e:
+        raise ValueError(f"Git command failed: {e.stderr}")
+    except FileNotFoundError:
+        raise ValueError("Git is not installed or not in PATH")
+    
+
+# COMMANDS
 @app.command()
 def history(
     action: str = typer.Argument("list", help="Action: list, show, search, stats, clear"),
@@ -305,6 +363,135 @@ def history(
         console.print("  alfred history search SQL   # Search reviews")
         console.print("  alfred history stats        # Statistics")
         console.print("  alfred history clear        # Clear all\n")
+        sys.exit(1)
+
+
+@app.command()
+def review_git(
+    staged: bool = typer.Option(True, "--staged/--unstaged", help="Review staged or unstaged changes"),
+    since: Optional[str] = typer.Option(None, "--since", help="Review changes since branch/commit (e.g., main, HEAD~1)"),
+    focus: str = typer.Option("general", "--focus", "-f", help="Review focus"),
+    api_key: Optional[str] = typer.Option(None, "--api-key", "-k", envvar="ANTHROPIC_API_KEY"),
+    show_cost: bool = typer.Option(True, "--show-cost/--no-cost"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+    force: bool = typer.Option(False, "--force", help="Bypass balance warnings")
+):
+    """
+    Review git changes with AI
+    
+    Examples:
+        alfred review-git                     # Review staged changes
+        alfred review-git --unstaged          # Review unstaged changes
+        alfred review-git --since main        # Review changes since main branch
+        alfred review-git --since HEAD~3      # Review last 3 commits
+        alfred review-git --focus security    # Security-focused review
+    """
+    if verbose:
+        print_banner()
+    
+    # Check API key
+    config = Config()
+    anthropic_key = config.get_api_key(api_key)
+    
+    if not anthropic_key:
+        console.print("[red]❌ Anthropic API key required. Run 'alfred setup'[/red]")
+        sys.exit(1)
+    
+    # Check balance
+    if not force:
+        balance_tracker = APIBalanceTracker(config.config_dir)
+        should_proceed, warning = balance_tracker.check_before_review(estimated_cost=0.15)
+        
+        if not should_proceed:
+            console.print(f"\n{warning}\n")
+            sys.exit(1)
+        
+        if warning:
+            console.print(f"\n{warning}\n")
+            proceed = Confirm.ask("Continue anyway?", default=True)
+            if not proceed:
+                console.print("\n[yellow]Review cancelled[/yellow]\n")
+                sys.exit(0)
+    
+    try:
+        # Get git diff
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console
+        ) as progress:
+            task = progress.add_task("Getting git diff...", total=None)
+            diff, description = get_git_diff(staged=staged, since=since)
+        
+        # Check if there are changes
+        if not diff.strip():
+            console.print(f"\n[yellow]No {description} to review[/yellow]\n")
+            if staged:
+                console.print("[dim]Tip: Use --unstaged to review uncommitted changes[/dim]")
+            elif not since:
+                console.print("[dim]Tip: Stage changes with 'git add' first[/dim]")
+            console.print()
+            sys.exit(0)
+        
+        # Show what we're reviewing
+        console.print(f"\n📝 Reviewing: [cyan]{description}[/cyan]")
+        console.print(f"🎯 Focus: [cyan]{focus}[/cyan]\n")
+        
+        # Count changes
+        lines = diff.split('\n')
+        additions = sum(1 for line in lines if line.startswith('+') and not line.startswith('+++'))
+        deletions = sum(1 for line in lines if line.startswith('-') and not line.startswith('---'))
+        
+        console.print(f"📊 Changes: [green]+{additions}[/green] [red]-{deletions}[/red]\n")
+        
+        # Review with progress
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console
+        ) as progress:
+            task = progress.add_task("🤖 Claude is reviewing your changes...", total=None)
+            agent = CodeReviewAgent(api_key=anthropic_key)
+            review_result, cost_info = agent.review_git_diff(diff, focus, track_cost=show_cost)
+        
+        # Display results
+        console.print("\n" + "="*70 + "\n")
+        md = Markdown(review_result)
+        console.print(Panel(md, title="📋 Git Diff Review", border_style="green"))
+        
+        # Save to history
+        from .review_history import ReviewHistory
+        history_tracker = ReviewHistory(config.config_dir)
+        review_id = history_tracker.save_review(
+            filepath=f"git-{description.replace(' ', '-')}",
+            review_text=review_result,
+            focus=focus,
+            cost=cost_info['cost'] if cost_info else None
+        )
+        
+        # Show cost
+        if show_cost and cost_info:
+            console.print("\n💰 [bold cyan]Cost Information:[/bold cyan]")
+            console.print(f"   Cost: [yellow]${cost_info['cost']:.4f}[/yellow]")
+            console.print(f"   [dim]Saved as review #{review_id}[/dim]")
+            
+            # Show balance
+            balance_tracker = APIBalanceTracker(config.config_dir)
+            status = balance_tracker.get_detailed_status()
+            if status['has_balance']:
+                console.print(f"   Balance: ${status['balance']:.2f} (~{status['estimated_reviews_left']} reviews left)")
+        
+        console.print("\n[green]✅ Review complete![/green]")
+        console.print(f"[dim]View again:[/dim] [cyan]alfred history show {review_id}[/cyan]\n")
+        
+    except ValueError as e:
+        console.print(f"\n[red]❌ Error: {str(e)}[/red]\n")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"\n[red]❌ Error: {str(e)}[/red]")
+        if verbose:
+            import traceback
+            console.print("\n[dim]" + traceback.format_exc() + "[/dim]")
         sys.exit(1)
 
 @app.command()
@@ -731,6 +918,81 @@ def github_login():
     else:
         error = result.get('error', 'Unknown error')
         console.print(f"\n[red]❌ Login failed: {error}[/red]\n")
+
+@app.command()
+def git_status():
+    """
+    Show git status with review suggestions
+    
+    Shows what files have changed and suggests review commands
+    """
+    try:
+        # Get git status
+        result = subprocess.run(
+            ['git', 'status', '--short'],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        
+        if not result.stdout.strip():
+            console.print("\n[green]✅ Working tree clean[/green]\n")
+            return
+        
+        console.print("\n[bold cyan]📊 Git Status[/bold cyan]\n")
+        
+        # Parse status
+        staged = []
+        unstaged = []
+        untracked = []
+        
+        for line in result.stdout.strip().split('\n'):
+            status = line[:2]
+            filename = line[3:]
+            
+            if status[0] != ' ' and status[0] != '?':
+                staged.append(filename)
+            if status[1] != ' ' and status[1] != '?':
+                unstaged.append(filename)
+            if status == '??':
+                untracked.append(filename)
+        
+        # Show changes
+        if staged:
+            console.print(f"[green]Staged changes:[/green] {len(staged)} files")
+            for f in staged[:5]:
+                console.print(f"  [green]✓[/green] {f}")
+            if len(staged) > 5:
+                console.print(f"  [dim]... and {len(staged) - 5} more[/dim]")
+            console.print()
+        
+        if unstaged:
+            console.print(f"[yellow]Unstaged changes:[/yellow] {len(unstaged)} files")
+            for f in unstaged[:5]:
+                console.print(f"  [yellow]M[/yellow] {f}")
+            if len(unstaged) > 5:
+                console.print(f"  [dim]... and {len(unstaged) - 5} more[/dim]")
+            console.print()
+        
+        if untracked:
+            console.print(f"[dim]Untracked files:[/dim] {len(untracked)} files")
+            console.print()
+        
+        # Suggest commands
+        console.print("[bold]💡 Review suggestions:[/bold]")
+        if staged:
+            console.print("  [cyan]alfred review-git[/cyan]                # Review staged changes")
+        if unstaged:
+            console.print("  [cyan]alfred review-git --unstaged[/cyan]    # Review unstaged changes")
+        console.print("  [cyan]alfred review-git --since main[/cyan]    # Review all changes since main")
+        console.print()
+        
+    except subprocess.CalledProcessError:
+        console.print("\n[red]❌ Not a git repository[/red]\n")
+        sys.exit(1)
+    except FileNotFoundError:
+        console.print("\n[red]❌ Git is not installed[/red]\n")
+        sys.exit(1)
 
 
 @app.command(name="github-status")

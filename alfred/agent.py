@@ -154,3 +154,50 @@ class CodeReviewAgent:
                 results[filepath] = f"Error reviewing file: {str(e)}"
         
         return results
+    
+    def review_git_diff(
+        self,
+        diff: str,
+        focus: str = "general",
+        max_tokens: int = 4000,
+        track_cost: bool = True
+    ) -> tuple[str, Optional[Dict]]:
+        """
+        Review git diff (staged or unstaged changes)
+        
+        Args:
+            diff: Git diff output (unified diff format)
+            focus: Review focus area
+            max_tokens: Maximum tokens for response
+            track_cost: Whether to track costs
+            
+        Returns:
+            Tuple of (review text, cost info dict or None)
+        """
+        from .prompts import get_git_diff_review_prompt
+        
+        # Generate git diff review prompt
+        user_prompt = get_git_diff_review_prompt(diff, focus)
+        
+        # Call Claude
+        message = self.client.messages.create(
+            model=self.model,
+            max_tokens=max_tokens,
+            system=SYSTEM_PROMPT,
+            messages=[
+                {
+                    "role": "user",
+                    "content": user_prompt
+                }
+            ]
+        )
+        
+        # Track cost if enabled
+        cost_info = None
+        if track_cost:
+            cost_info = self.cost_tracker.track_review(message.usage, "git-diff")
+        
+        # Extract response
+        review_text = message.content[0].text
+        
+        return review_text, cost_info
